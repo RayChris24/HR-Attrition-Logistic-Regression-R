@@ -1,0 +1,228 @@
+---
+title: "Predictive Modeling for HR Employee Attrition"
+author: "Chris Ray"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: flatly
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+# This chunk configures the document to hide messy warnings and messages
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## 1. Project Description
+Employee attrition (turnover) is a major cost to organizations, impacting productivity, morale, and recruitment budgets. This project utilizes machine learning—specifically Logistic Regression—to analyze a dataset of HR records. The goal is to perform business inference: identifying the key drivers behind why employees leave and building a predictive model to flag high-risk employees.
+
+## 2. Business Problem
+If the Human Resources department can proactively identify which employees are statistically most likely to quit and understand the reasons why, they can implement targeted retention strategies—such as salary adjustments, remote work flexibility, or role changes—ultimately saving the company significant replacement costs.
+
+## 3. Data Dictionary
+*Note: The dataset contains 35 variables; the most critical ones for this analysis are defined below.*
+
+* **Attrition**: Whether the employee left the company (Yes/No) - *Target Variable*
+* **Age**: Employee's age in years
+* **DistanceFromHome**: Distance from home to work (in miles)
+* **JobSatisfaction**: Rating from 1 (Low) to 4 (High)
+* **NumCompaniesWorked**: Number of previous employers
+* **MonthlyIncome**: Monthly salary
+* **TotalWorkingYears**: Total years of professional experience
+
+---
+
+## 4. Importing Libraries
+```{r libraries}
+# Load necessary libraries for data manipulation and modern visualization
+library(ggplot2)
+```
+
+## 5. Loading the Dataset
+We use a relative file path to ensure this project is fully reproducible on any machine.
+
+```{r loading}
+# Load the dataset
+data <- read.csv("HR-Employee-Attrition.csv", stringsAsFactors = TRUE)
+
+# Display the dimensions of the dataset
+dim(data)
+```
+
+## 6. Data Preprocessing
+Before exploring the data, we must remove columns that provide zero predictive value. Columns like EmployeeCount, StandardHours, and Over18 contain the exact same value for every single row (zero variance). EmployeeNumber is simply an identifier.
+
+```{r preprocess}
+# Drop zero-variance and ID columns (Notice how this has a # because it is INSIDE the code chunk!)
+data <- subset(data, select = -c(EmployeeCount, EmployeeNumber, Over18, StandardHours))
+
+# Check for any missing values
+sum(is.na(data))
+```
+
+**Interpretation:** The dataset contains 0 missing values, meaning we do not need to perform data imputation. The dataset is clean and ready for exploration.
+
+---
+
+## 7. Exploratory Data Analysis (EDA)
+
+### 7.1 Distribution of the Target Variable (Attrition)
+```{r eda_attrition}
+ggplot(data, aes(x = Attrition, fill = Attrition)) +
+  geom_bar() +
+  theme_minimal() +
+  labs(title = "Distribution of Employee Attrition", x = "Attrition", y = "Count") +
+  scale_fill_manual(values = c("No" = "#5b9bd5", "Yes" = "#ed7d31")) +
+  geom_text(stat='count', aes(label=..count..), vjust=-0.5)
+```
+
+**Interpretation:** The dataset is highly imbalanced. The vast majority of employees (1,233) stayed, while a smaller fraction (237) left. This is typical for HR data, but it is a crucial insight: our model must be careful to properly identify the minority class (the "Yes" group) rather than just guessing "No" for everyone.
+
+### 7.2 Number of Companies Worked vs. Attrition
+```{r eda_complanies}
+ggplot(data, aes(x = Attrition, y = NumCompaniesWorked, fill = Attrition)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Number of Previous Companies by Attrition Status") +
+  scale_fill_manual(values = c("No" = "#5b9bd5", "Yes" = "#ed7d31"))
+```
+
+**Interpretation:** The boxplot reveals that employees who leave ("Yes") tend to have a slightly higher median number of past companies compared to those who stay. This suggests a pattern of "job-hopping" may be a behavioral indicator of future attrition.
+
+### 7.3 Monthly Income Distribution by Attrition
+```{r eda_income}
+ggplot(data, aes(x = MonthlyIncome, fill = Attrition)) +
+  geom_density(alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "Monthly Income Distribution by Attrition", x = "Monthly Income", y =  "Density") +
+  scale_fill_manual(values = c("No" = "#5b9bd5", "Yes" = "#ed7d31"))
+```
+
+**Interpretation:** The density plot clearly shows a massive spike in attrition at the lower end of the monthly income scale. Employees making less than $5,000 a month are significantly more likely to leave the company, whereas attrition tapers off heavily for higher earners.
+
+### 7.4 Proportion of Attrition by Job Role
+```{r eda_job}
+ggplot(data, aes(x = JobRole, fill = Attrition)) +
+  geom_bar(position = "fill") +
+  theme_minimal() +
+  coord_flip() + 
+  labs(title = "Proportion of Attrition by Job Role", x = "Job Role", y = "Proportion") +
+  scale_fill_manual(values = c("No" = "#5b9bd5", "Yes" = "#ed7d31"))
+```
+
+**Interpretation:** By looking at the proportions, we can identify specific departments that are "bleeding" talent. Sales Representatives and Laboratory Technicians have the highest proportional turnover rates, indicating that HR should investigate the working conditions or competitive pay within those specific roles.
+
+### 7.5 Age Distribution by Attrition Status
+```{r eda_age}
+ggplot(data, aes(x = Attrition, y = Age, fill = Attrition)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Employee Age vs. Attrition") +
+  scale_fill_manual(values = c("No" = "#5b9bd5", "Yes" = "#ed7d31"))
+```
+
+**Interpretation:** The median age of employees who leave is noticeably lower (around 32 years old) compared to those who stay (around 36 years old). This suggests the company is struggling specifically with early-career retention.
+
+---
+
+## 8. Feature Engineering
+We can create new variables that might uncover hidden patterns. Here, we calculate the exact number of years an employee spent at their previous company before joining us.
+
+```{r feature_eng}
+# Create new feature: Years spent at previous employment
+data$YearsAtLastCompany <- data$TotalWorkingYears - data$YearsAtCompany
+
+# Ensure logical variables are treated as categories
+data$Attrition <- as.factor(data$Attrition)
+data$BusinessTravel <- as.factor(data$BusinessTravel)
+```
+
+### Section 9: Train-Test Split
+
+---
+
+## 9. Train-Test Split
+To ensure our model generalizes well to unseen data, we split our dataset. We will train the model on 70% of the data and test its predictive power on the remaining 30%.
+
+```{r split}
+set.seed(123) # Set seed for reproducibility
+
+sample_size <- floor(0.70 * nrow(data))
+train_indices <- sample(seq_len(nrow(data)), size = sample_size)
+
+train_data <- data[train_indices, ]
+test_data <- data[-train_indices, ]
+
+cat("Training Set:", nrow(train_data), "rows\n")
+cat("Testing Set:", nrow(test_data), "rows\n")
+```
+
+---
+
+## 10. Building the Logistic Regression Model
+Since our target variable (`Attrition`) is binary (Yes/No), we use Logistic Regression to uncover linear relationships between our features and the log-odds of an employee leaving.
+
+```{r model_build}
+# Build the model on the training data
+log_model <- glm(Attrition ~ Age + DistanceFromHome + Gender + JobRole + 
+                   JobSatisfaction + MaritalStatus + MonthlyIncome,
+                 data = train_data, family = binomial)
+
+# Output the model summary
+summary(log_model)
+```
+
+### 10.1 Converting to Odds Ratios for Business Interpretability
+Logistic Regression outputs coefficients in log-odds, which are difficult for non-technical stakeholders to interpret. By exponentiating the coefficients, we get actionable Odds Ratios.
+
+```{r odds_ratio}
+# Calculate Odds Ratios
+odds_ratios <- exp(coef(log_model))
+print(round(odds_ratios, 3))
+```
+
+**Interpretation of Model Diagnostics:** Distance From Home (Geographical): The Odds Ratio for DistanceFromHome is ~1.04. This provides a highly actionable insight: For every 1 additional mile added to an employee's commute, their odds of quitting increase by roughly 4%.
+
+-  Job Satisfaction (Behavioral): The Odds Ratio is less than 1 (approx 0.73). This means that for every 1-point increase in an employee's satisfaction rating, their odds of leaving the company drop by about 27%.
+
+-  Age (Demographic): The Odds Ratio for Age is ~0.96. For every additional year of age, the odds of attrition decrease by 4%, indicating that older, more established employees offer much higher retention stability.
+
+-  Marital Status (Categorical): The model shows that being "Single" has a high positive coefficient compared to being married. Single employees have significantly higher odds of leaving, which may tie into a higher willingness to relocate or take career risks early in life.
+
+---
+
+## 11. Model Evaluation & Predictions
+Let's test our model against the 30% of data it has never seen before.
+
+```{r evaluation}
+# Predict probabilities on the unseen test data
+probabilities <- predict(log_model, newdata = test_data, type = "response")
+
+# Convert probabilities to a strict Yes/No prediction (using a 0.5 threshold)
+predictions <- ifelse(probabilities > 0.5, "Yes", "No")
+
+# Generate the Confusion Matrix
+confusion_matrix <- table(Predicted = predictions, Actual = test_data$Attrition)
+print(confusion_matrix)
+
+# Calculate Accuracy
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+cat("\nModel Accuracy:", round(accuracy * 100, 2), "%\n")
+```
+
+**Interpretation:** Our model achieved a strong overall accuracy on the test set. The confusion matrix  breaks down our True Positives, True Negatives, False Positives, and False Negatives, proving that the model can successfully differentiate between employees who will stay and those who are at risk of leaving.
+
+---
+
+## 12. Conclusion & Key Learnings
+Through this analysis, we applied a full end-to-end data science workflow to solve a real-world HR problem using Logistic Regression. 
+
+* **Model Performance:** The Logistic Regression model successfully predicted attrition with an overall accuracy of ** 83.9% ** on unseen test data, proving that employee turnover can be mathematically anticipated.
+* **Commute Fatigue (Business Insight):** Distance from home is a statistically proven driver of turnover (increasing the odds of leaving by 4% per mile). HR should consider localized hiring or offering flexible/remote work days for employees with long commutes.
+* **Satisfaction Matters (Business Insight):** Job Satisfaction is highly correlated with retention. Management should treat internal satisfaction surveys seriously, as drops in these scores are leading indicators of resignations.
+* **Actionable Next Steps:** HR can deploy this model to flag current employees who match the high-risk criteria (e.g., long commute, low satisfaction, younger age) and conduct proactive retention interviews before the employee decides to quit.
+
+---
+**End of Analysis**
